@@ -71,8 +71,49 @@ class SimDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attn_mask,
             "token_type_ids": token_type_ids,
-            "label": label
+            "label": float(label)
         }
     
     def __len__(self):
         return len(self.final_list)
+
+class EvalSim(Dataset):
+    def __init__(self, tokenizer, target_file_name, padding_length=128):
+        self.tokenizer = tokenizer
+        self.padding_length = padding_length
+        self.ori_list = self.load_train(target_file_name)
+    
+    def load_train(self, file_name):
+        with open(file_name, encoding='utf-8') as f:
+            ori_list = f.read().split('\n')
+        if ori_list[len(ori_list) - 1] == '':
+            ori_list = ori_list[:len(ori_list) - 1]
+        return ori_list
+    
+    def computed_eval_set(self, src):
+        self.eval_list = []
+        for line in self.ori_list:
+            line = line.strip()
+            self.eval_list.append({
+                "src": src,
+                "tgt": line,
+                "label": -1
+            })
+        return self.eval_list
+    
+    def __getitem__(self, idx):
+        line = self.eval_list[idx]
+        s1, s2, label = line['src'], line['tgt'], line['label']
+        T = self.tokenizer(s1, s2, add_special_tokens=True, max_length=self.padding_length, padding='max_length', truncation=True)
+        input_ids = torch.tensor(T['input_ids'])
+        attn_mask = torch.tensor(T['attention_mask'])
+        token_type_ids = torch.tensor(T['token_type_ids'])
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attn_mask,
+            "token_type_ids": token_type_ids,
+            "label": float(label)
+        }
+    
+    def __len__(self):
+        return len(self.eval_list)

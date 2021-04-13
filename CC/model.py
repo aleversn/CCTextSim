@@ -1,3 +1,4 @@
+import json
 from CC.ICCStandard import IModel
 from CC.models.bert import Bert
 

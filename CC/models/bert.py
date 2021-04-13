@@ -5,19 +5,19 @@ from transformers import BertModel, BertConfig, BertTokenizer, BertForSequenceCl
 
 class Bert(nn.Module):
 
-    def __init__(self, tokenizer, model_pretrained_dir):
+    def __init__(self, tokenizer, pretrained_dir):
         super().__init__()
-        self.model = BertForSequenceClassification.from_pretrained(model_pretrained_dir)
+        self.model = BertForSequenceClassification.from_pretrained(pretrained_dir)
         self.tokenizer = tokenizer
     
-    def forward(self, sentences, attention_mask, token_type_ids, labels, padding_length):
-        fct_loss = nn.MSELoss()
-        outputs = self.model(sentences, attention_mask=attention_mask, token_type_ids=token_type_ids)
+    def forward(self, **args):
+        fct_loss = nn.BCELoss()
+        outputs = self.model(input_ids=args['input_ids'], attention_mask=args['attention_mask'], token_type_ids=args['token_type_ids'])
 
         logits = outputs[0]
         p = F.softmax(logits, dim=-1)
         pred = p[:, 1]
 
-        loss = fct_loss(p[:, 1], labels.view(-1))
+        loss = fct_loss(p[:, 1], args['label'].float().view(-1))
 
         return loss, pred

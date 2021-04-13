@@ -1,4 +1,5 @@
 import os
+import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -10,156 +11,151 @@ from CC.loader import AutoDataloader
 from CC.analysis import Analysis
 from tqdm import tqdm
 from torch.autograd import Variable
+from transformers import AdamW, get_linear_schedule_with_warmup
 
 class Trainer(ITrainer):
 
-    def __init__(self, tokenizer, model_name, dataset_name, model_type="bert", padding_length=50, batch_size=16, batch_size_eval=64, fit_sample=False):
+    def __init__(self, tokenizer, model_dir, dataset_name, padding_length=50, batch_size=16, batch_size_eval=64):
+        self.tokenizer = tokenizer
         self.dataset_name = dataset_name
-        self.model_type = model_type
+        self.model_init(tokenizer, model_dir)
         self.padding_length = padding_length
-        self.dataloader_init(tokenizer, dataset_name, model_type, padding_length, batch_size, batch_size_eval, fit_sample=fit_sample)
-        self.model_init(tokenizer, model_name)
+        self.dataloader_init(tokenizer, dataset_name, self.config['model_type'], padding_length, batch_size, batch_size_eval)
     
-    def model_init(self, tokenizer, model_name):
-        print('AutoModel Choose Model: {}\n'.format(model_name))
-        a = AutoModel(tokenizer, model_name)
+    def model_init(self, tokenizer, model_dir):
+        a = AutoModel(tokenizer, model_dir)
+        print('AutoModel Choose Model: {}\n'.format(a.model_name))
+        self.model_cuda = False
+        self.config = a.config
         self.model = a()
 
-    def dataloader_init(self, tokenizer, data_name, model_type="bert", padding_length=50, batch_size=16, batch_size_eval=64, fit_sample=False):
+    def dataloader_init(self, tokenizer, data_name, model_type, padding_length, batch_size=16, batch_size_eval=64):
         d = AutoDataloader(tokenizer, data_name, model_type, padding_length)
-        if "weakly" not in model_type:
-            self.train_loader, self.eval_loader = d(batch_size, batch_size_eval)
-        else:
-            self.train_loader, self.eval_loader, self.fit_loader = d(batch_size, batch_size_eval, fit_sample=fit_sample)
+        self.train_loader, self.eval_loader, self.test_loader = d(batch_size, batch_size_eval)
     
     def __call__(self, resume_path=False, num_epochs=30, lr=5e-5, gpu=[0, 1, 2, 3], score_fitting=False):
         self.train(resume_path, num_epochs, lr, gpu, score_fitting)
 
-    def train(self, resume_path=False, num_epochs=30, lr=5e-5, gpu=[0, 1, 2, 3], score_fitting=False):
+    def train(self, resume_path=False, num_epochs=10, lr=5e-5, gpu=[0, 1, 2, 3], is_eval='train/eval', eval_mode='dev', fp16=False, fp16_opt_level='O1'):
+        '''
+        is_eval: decide whether to eval, True - both training and evaluating; False - only training.
+        eval_mode: 'dev' or 'test'.
+        fp16_opt_level: For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3'].
+        '''
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model.cuda()
-        self.model = torch.nn.DataParallel(self.model, device_ids=gpu).cuda()
+        self.model.to(device)
+        
+        optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.)
+        scheduler = get_linear_schedule_with_warmup(optimizer, 100, 80000)
+
+        if fp16:
+            try:
+                from apex import amp
+            except ImportError:
+                raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+            self.model, optimizer = amp.initialize(self.model, optimizer, opt_level=fp16_opt_level)
+        
+        if torch.cuda.is_available() and self.model_cuda == False:
+            self.model = torch.nn.DataParallel(self.model, device_ids=gpu).cuda()
+            self.model_cuda = True
+            self.model.to(device)
 
         if not resume_path == False:
             print('Accessing Resume PATH: {} ...\n'.format(resume_path))
             model_dict = torch.load(resume_path).module.state_dict()
             self.model.module.load_state_dict(model_dict)
-        self.model.to(device)
+            self.model.to(device)
         
-        optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=0.)
+        optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=0.)
+        scheduler = get_linear_schedule_with_warmup(optimizer, 100, 80000)
         
         Epoch_loss = []
-        Epoch_error = []
-        Epoch_R = []
-        Epoch_RMSE = []
-
+        Epoch_acc = []
         Epoch_loss_eval = []
-        Epoch_error_eval = []
-        Epoch_R_eval = []
-        Epoch_RMSE_eval = []
+        Epoch_acc_eval = []
         for epoch in range(num_epochs):
             train_count = 0
+            train_result = []
             train_loss = []
-            X = []
-            Y = []
-            Epoch_X_eval = []
-            Epoch_Y_eval = []
-            train_error = []
-            if not score_fitting:
-                train_iter = tqdm(self.train_loader)
-            else:
-                train_iter = tqdm(self.fit_loader)
+            self.train_loader.dataset.train_compose()
+            train_iter = tqdm(self.train_loader)
             self.model.train()
-            for sentences, mask, token_type_ids, labels in train_iter:
-                sentences = self.cuda(sentences)
-                mask = self.cuda(mask)
-                token_type_ids = self.cuda(token_type_ids)
-                labels = self.cuda(labels)
+            for it in train_iter:
+                for key in it.keys():
+                    it[key] = self.cuda(it[key])
                 self.model.zero_grad()
                 
-                loss, pred = self.model(sentences=sentences, attention_mask=mask, token_type_ids=token_type_ids, labels=labels, padding_length=self.padding_length)
+                loss, pred = self.model(**it)
                 loss = loss.mean()
 
                 optimizer.zero_grad()
-                loss.backward()
+                if fp16:
+                    with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
+                else:
+                    loss.backward()
+                
                 optimizer.step()
+                scheduler.step()  # Update learning rate schedule
 
                 train_loss.append(loss.data.item())
 
-                X += labels.tolist()
-                Y += pred.tolist()
-                r, r_mse, p_, s_ = Analysis.Evaluation(X, Y)
-                train_error.append((torch.abs(pred - labels)).mean().data.item())
                 train_count += 1
 
+                p = pred.max(-1)[1]
+                train_result += (p == it['label']).int().tolist()
+
                 train_iter.set_description('Train: {}/{}'.format(epoch + 1, num_epochs))
-                train_iter.set_postfix(train_loss=np.mean(train_loss), R=r, RMSE=r_mse, Pearson=p_, Spearman=s_, train_error=np.mean(train_error))
+                train_iter.set_postfix(train_loss=np.mean(train_loss), train_acc=np.mean(train_result))
             
             Epoch_loss.append(np.mean(train_loss))
-            Epoch_error.append(np.mean(train_error))
-            Epoch_R.append(r)
-            Epoch_RMSE.append(r_mse)
+            Epoch_acc.append(np.mean(train_result))
             
-            if score_fitting == False:
-                _dir = './log/{}/{}'.format(self.dataset_name, self.model_type)
-            else:
-                _dir = './log/{}/{}'.format(self.dataset_name, self.model_type + '_fit')
-            Analysis.save_same_row_list(_dir, 'train_log', loss=Epoch_loss, error=Epoch_error, R=Epoch_R, RMSE=Epoch_RMSE)
+            _dir = './log/{}/{}'.format(self.dataset_name, self.config["model_type"])
+            Analysis.save_same_row_list(_dir, 'train_log', loss=Epoch_loss, acc=Epoch_acc)
             if resume_path == False:
-                self.save_model(epoch, 0, score_fitting)
+                self.save_model(epoch, 0)
             else:
-                self.save_model(epoch, int(resume_path.split('/')[-1].split('_')[1].split('.')[0]), score_fitting)
+                self.save_model(epoch, int(resume_path.split('/')[-1].split('_')[1].split('.')[0]))
             
-            A, B, C, D, E, F = self.eval(epoch, num_epochs)
-            Epoch_X_eval += A
-            Epoch_Y_eval += B
-            Epoch_loss_eval.append(C)
-            Epoch_error_eval.append(D)
-            Epoch_R_eval.append(E)
-            Epoch_RMSE_eval.append(F)
-            Analysis.save_xy(Epoch_X_eval, Epoch_Y_eval, _dir)
-            Analysis.save_same_row_list(_dir, 'eval_log', loss=Epoch_loss_eval, error=Epoch_error_eval, R=Epoch_R_eval, RMSE=Epoch_RMSE_eval)
+            if is_eval == True:
+                acc, eval_loss = self.eval(epoch, num_epochs, eval_mode=eval_mode, gpu=gpu, save_pred_dir=_dir)
+                Epoch_loss_eval.append(eval_loss)
+                Epoch_acc_eval.append(acc)
+                Analysis.save_same_row_list(_dir, 'eval_log', loss=Epoch_loss_eval, acc=Epoch_acc_eval)
 
-    def save_model(self, epoch, save_offset=0, score_fitting=False):
-        if score_fitting == False:
-            _dir = './model/{}/{}'.format(self.dataset_name, self.model_type)
-        else:
-            _dir = './model/{}/{}'.format(self.dataset_name, self.model_type + '_fit')
+    def save_model(self, epoch, save_offset=0):
+        _dir = './model/{}/{}'.format(self.dataset_name, self.config["model_type"])
         if not os.path.isdir(_dir):
             os.makedirs(_dir)
         torch.save(self.model, '{}/epoch_{}.pth'.format(_dir, epoch + 1 + save_offset))
 
     def eval(self, epoch, num_epochs):
         with torch.no_grad():
-            eval_loss = []
-            X = []
-            Y = []
             eval_count = 0
-            eval_error = []
+            eval_result = []
+            eval_loss = []
             self.model.eval()
+            self.eval_loader.dataset.eval_compose()
             eval_iter = tqdm(self.eval_loader)
-            for sentences, mask, token_type_ids, labels in eval_iter:
-                self.model.eval()
-                sentences = self.cuda(sentences)
-                mask = self.cuda(mask)
-                token_type_ids = self.cuda(token_type_ids)
-                labels = self.cuda(labels)
+            for it in eval_iter:
+                for key in it.keys():
+                    it[key] = self.cuda(it[key])
 
-                loss, pred = self.model(sentences, attention_mask=mask, token_type_ids=token_type_ids, labels=labels, padding_length=self.padding_length)
+                loss, pred = self.model(**it)
                 loss = loss.mean()
 
-                eval_loss.append(loss.sum().data.item())
+                eval_loss.append(loss.data.item())
 
-                X += labels.tolist()
-                Y += pred.tolist()
-                r, r_mse, p_, s_ = Analysis.Evaluation(X, Y)
-                eval_error.append((torch.abs(pred - labels)).mean().data.item())
                 eval_count += 1
-                
+
+                p = pred.max(-1)[1]
+                eval_result += (p == it['label']).int().tolist()
+
                 eval_iter.set_description('Eval: {}/{}'.format(epoch + 1, num_epochs))
-                eval_iter.set_postfix(eval_loss=np.mean(eval_loss), R=r, RMSE=r_mse, Pearson=p_, Spearman=s_, eval_avg=np.mean(eval_error))
+                eval_iter.set_postfix(eval_loss=np.mean(eval_loss), eval_acc=np.mean(eval_result))
             
-            return X, Y, np.mean(eval_loss), np.mean(eval_error), r, r_mse
+            return np.mean(eval_result), np.mean(train_loss)
         
     def cuda(self, inputX):
         if type(inputX) == tuple:

@@ -9,10 +9,10 @@ class AutoDataloader(IDataLoader):
         self.model_type = model_type
         model_list_1 = ['bert']
         if data_name == 'sim':
-            if model_type in model_list_1
+            if model_type in model_list_1:
                 self.training_set = SimDataset(tokenizer, './datasets/FNSim/train.csv', padding_length=padding_length, is_train=True)
-                self.dev_set = SimDataset(tokenizer, './datasets/FNSim/dev.csv', padding_length=padding_length, mode='eval')
-                self.test_set = SimDataset(tokenizer, './datasets/FNSim/test.csv', padding_length=padding_length, mode='eval')
+                self.dev_set = SimDataset(tokenizer, './datasets/FNSim/dev.csv', padding_length=padding_length)
+                self.test_set = SimDataset(tokenizer, './datasets/FNSim/test.csv', padding_length=padding_length)
     
     def __call__(self, batch_size=16, batch_size_eval=64, fit_sample=False):
         dataiter = DataLoader(self.training_set, batch_size=batch_size)
