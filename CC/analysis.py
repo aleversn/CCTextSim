@@ -16,25 +16,12 @@ class Analysis(IAnalysis):
     
     @staticmethod
     def Evaluation(X, Y):
-        if len(X) == 0:
-            return 0, 0
-        if len(X) != len(Y):
-            raise Exception('mismatch length of X and Y')
-        x_mean = np.mean(X)
-        y_mean = np.mean(Y)
-        r_a = 0
-        r_b = 0
-        r_c = 0
-        r_mse = 0
-        for i in range(len(X)):
-            _x = (X[i] - x_mean)
-            _y = (Y[i] - y_mean)
-            r_a += _x * _y
-            r_b += _x ** 2
-            r_c += _y ** 2
-            r_mse += (X[i] - Y[i]) ** 2
-        r = r_a / (r_b ** 0.5 * r_c ** 0.5)
-        r_mse = (r_mse / len(X)) ** 0.5
+        correct = 0
+        pos = 0
+        total_P = len(X)
+        for idx, x in enumerate(X):
+            if x == Y[idx]:
+                correct += 1
 
         return r, r_mse, pearsonr(X, Y)[0], spearmanr(X, Y)[0]
     
