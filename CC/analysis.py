@@ -15,15 +15,61 @@ class Analysis(IAnalysis):
             f.write(info)
     
     @staticmethod
-    def Evaluation(X, Y):
-        correct = 0
-        pos = 0
-        total_P = len(X)
-        for idx, x in enumerate(X):
-            if x == Y[idx]:
-                correct += 1
-
-        return r, r_mse, pearsonr(X, Y)[0], spearmanr(X, Y)[0]
+    def Evaluation(src_file_name, gold_file_name, tgt_file_name):
+        with open(src_file_name, encoding='utf-8') as f:
+            src_list = f.read().split('\n')
+        if src_list[len(src_list) - 1] == '':
+            src_list = src_list[:len(src_list) - 1]
+        with open(gold_file_name, encoding='utf-8') as f:
+            gold_list = f.read().split('\n')
+        if gold_list[len(gold_list) - 1] == '':
+            gold_list = gold_list[:len(gold_list) - 1]
+        with open(tgt_file_name, encoding='utf-8') as f:
+            tgt_list = f.read().split('\n')
+        if tgt_list[len(tgt_list) - 1] == '':
+            tgt_list = tgt_list[:len(tgt_list) - 1]
+        
+        tp = 0
+        fp = 0
+        fn = len(src_list)
+        for idx, _ in enumerate(src_list):
+            src, pred = src_list[idx].split('\t')
+            gold = gold_list[idx].split('\t')[1]
+            if pred == gold:
+                tp += 1
+            elif pred in gold:
+                tp += 1
+            elif gold in pred:
+                tp += 1
+            else:
+                fp += 1
+        
+        p = tp / (tp + fp)
+        r = tp / fn
+        f1 = 2 * p * r / (p + r)
+        
+        return p, r, f1
+    
+    @staticmethod
+    def DiffOutput(src_file_name, gold_file_name, save_file_name):
+        with open(src_file_name, encoding='utf-8') as f:
+            src_list = f.read().split('\n')
+        if src_list[len(src_list) - 1] == '':
+            src_list = src_list[:len(src_list) - 1]
+        with open(gold_file_name, encoding='utf-8') as f:
+            gold_list = f.read().split('\n')
+        if gold_list[len(gold_list) - 1] == '':
+            gold_list = gold_list[:len(gold_list) - 1]
+        
+        result = '原文\t预测\t人工标注\n'
+        for idx, _ in enumerate(src_list):
+            src, pred = src_list[idx].split('\t')
+            gold = gold_list[idx].split('\t')[1]
+            if pred != gold:
+                result += '{}\t{}\t{}\n'.format(src, pred, gold)
+        
+        with open(save_file_name, mode='w+') as f:
+            f.write(result)
     
     @staticmethod
     def heatmap(data):

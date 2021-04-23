@@ -15,9 +15,8 @@ class Bert(nn.Module):
         outputs = self.model(input_ids=args['input_ids'], attention_mask=args['attention_mask'], token_type_ids=args['token_type_ids'])
 
         logits = outputs[0]
-        p = F.softmax(logits, dim=-1)
-        pred = p[:, 1]
+        pred = F.softmax(logits, dim=-1)
 
-        loss = fct_loss(p[:, 1], args['label'].float().view(-1))
+        loss = fct_loss(pred[:, 1], args['label'].float().view(-1))
 
         return loss, pred

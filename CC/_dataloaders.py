@@ -49,14 +49,19 @@ class SimDataset(Dataset):
                 "tgt": line[1],
                 "label": 1
             })
-            neg_tgt = line[1]
-            while(neg_tgt == line[1]):
-                neg_tgt = random.sample(self.ori_list, 1)
-            self.final_list.append({
-                "src": line[0],
-                "tgt": line[1],
-                "label": 0
-            })
+            _tgt_list = random.sample(self.ori_list, 9)
+            for _tgt in _tgt_list:
+                _tgt = _tgt.split('\t')[1]
+                self.final_list.append({
+                    "src": line[0],
+                    "tgt": _tgt,
+                    "label": 1 if _tgt == line[1] else 0
+                })
+                self.final_list.append({
+                    "src": line[0],
+                    "tgt": line[1],
+                    "label": 1
+                })
         random.shuffle(self.final_list)
         return self.final_list
     
@@ -78,17 +83,32 @@ class SimDataset(Dataset):
         return len(self.final_list)
 
 class EvalSim(Dataset):
-    def __init__(self, tokenizer, target_file_name, padding_length=128):
+    '''
+    src_file_name: 要预测的数据集
+    target_file_name: 标准问字典
+    '''
+    def __init__(self, tokenizer, src_file_name, target_file_name, padding_length=128):
         self.tokenizer = tokenizer
         self.padding_length = padding_length
-        self.ori_list = self.load_train(target_file_name)
+        self.ori_list, self.tgt_list = self.load_train(target_file_name)
+        self.src_list = self.src_init(src_file_name)
+        self.eval_list = []
     
     def load_train(self, file_name):
         with open(file_name, encoding='utf-8') as f:
             ori_list = f.read().split('\n')
         if ori_list[len(ori_list) - 1] == '':
             ori_list = ori_list[:len(ori_list) - 1]
-        return ori_list
+        tgt_list = [item.strip() for item in ori_list]
+        return ori_list, tgt_list
+    
+    def src_init(self, src_file_name):
+        with open(src_file_name, encoding='utf-8') as f:
+            src_list = f.read().split('\n')
+        if src_list[len(src_list) - 1] == '':
+            src_list = src_list[:len(src_list) - 1]
+        src_list = [item.split('\t')[0].strip() for item in src_list]
+        return src_list
     
     def computed_eval_set(self, src):
         self.eval_list = []
@@ -117,3 +137,17 @@ class EvalSim(Dataset):
     
     def __len__(self):
         return len(self.eval_list)
+
+class PredSim(EvalSim):
+    def __init__(self, tokenizer, target_file_name, padding_length=128):
+        self.tokenizer = tokenizer
+        self.padding_length = padding_length
+        self.ori_list = self.load_train(target_file_name)
+        self.eval_list = []
+    
+    def load_train(self, file_name):
+        with open(file_name, encoding='utf-8') as f:
+            ori_list = f.read().split('\n')
+        if ori_list[-1] == '':
+            ori_list = ori_list[:-1]
+        return ori_list

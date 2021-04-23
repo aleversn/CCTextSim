@@ -31,7 +31,12 @@ class Trainer(ITrainer):
 
     def dataloader_init(self, tokenizer, data_name, model_type, padding_length, batch_size=16, batch_size_eval=64):
         d = AutoDataloader(tokenizer, data_name, model_type, padding_length)
-        self.train_loader, self.eval_loader, self.test_loader = d(batch_size, batch_size_eval)
+        it = d(batch_size, batch_size_eval)
+        self.train_loader = it['dataiter']
+        self.eval_loader = it['dataiter_eval']
+        self.test_loader = it['dataiter_test']
+        if 'dataiter_result' in it:
+            self.result_loader = it['dataiter_result']
     
     def __call__(self, resume_path=False, num_epochs=30, lr=5e-5, gpu=[0, 1, 2, 3], score_fitting=False):
         self.train(resume_path, num_epochs, lr, gpu, score_fitting)
@@ -101,7 +106,6 @@ class Trainer(ITrainer):
                 train_loss.append(loss.data.item())
 
                 train_count += 1
-
                 p = pred.max(-1)[1]
                 train_result += (p == it['label']).int().tolist()
 
@@ -156,6 +160,50 @@ class Trainer(ITrainer):
                 eval_iter.set_postfix(eval_loss=np.mean(eval_loss), eval_acc=np.mean(eval_result))
             
             return np.mean(eval_result), np.mean(train_loss)
+    
+    def save_pred(self, save_dir, resume_path=None, gpu=[0, 1, 2, 3]):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
+        if torch.cuda.is_available() and self.model_cuda == False:
+            self.model = torch.nn.DataParallel(self.model, device_ids=gpu).cuda()
+            self.model_cuda = True
+            self.model.to(device)
+            
+        if resume_path is not None:
+            print('Accessing Resume PATH: {} ...\n'.format(resume_path))
+            model_dict = torch.load(resume_path).module.state_dict()
+            self.model.module.load_state_dict(model_dict)
+            self.model.to(device)
+        
+        with torch.no_grad():
+            result = ''
+            self.model.eval()
+            src_iter = tqdm(self.result_loader.dataset.src_list)
+            result_iter = self.result_loader
+            for src in src_iter:
+                result_iter.dataset.computed_eval_set(src)
+                src_result = torch.tensor([]).cuda()
+
+                for it in result_iter:
+                    for key in it.keys():
+                        it[key] = self.cuda(it[key])
+
+                    loss, pred = self.model(**it)
+                    loss = loss.mean()
+
+                    pred = pred[:, 1]
+                    src_result = torch.cat([src_result, pred], -1)
+                
+                pred_result = src_result.max(-1)[1].tolist()
+                result += '{}\t{}\n'.format(src, self.result_loader.dataset.tgt_list[pred_result])
+
+                src_iter.set_description('Preding')
+                src_iter.set_postfix(src=src, tgt=self.result_loader.dataset.tgt_list[pred_result])
+            
+            with open(os.path.join(save_dir, 'pred_result.csv'), mode='w+') as f:
+                f.write(result)
+            
+            return result
         
     def cuda(self, inputX):
         if type(inputX) == tuple:
