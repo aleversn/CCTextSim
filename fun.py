@@ -34,9 +34,28 @@ from transformers import BertTokenizer
 
 # %%
 tokenizer = BertTokenizer.from_pretrained('model/chinese_wwm_ext')
-pred = Predictor(tokenizer, model_dir='model/chinese_wwm_ext', target_file_name='./datasets/FNSim/target_list', padding_length=128, resume_path='./model/sim/bert/epoch_8.pth', batch_size=2000, gpu=[0, 1])
+pred = Predictor(tokenizer, model_dir='model/chinese_wwm_ext', target_file_name='./datasets/FNSim/target_list', padding_length=30, resume_path='./model/sim/bert/epoch_8.pth', batch_size=2000, gpu=[0, 1, 2, 3])
 
 # %%
 pred('频发心房下部早搏')[:5]
+
+# %%
+from tqdm import tqdm
+
+with open('./datasets/FN_Sichuan/top100_keywords.csv', encoding='utf-8') as f:
+    ori_list = f.read().split('\n')
+if ori_list[len(ori_list) - 1] == '':
+    ori_list = ori_list[:len(ori_list) - 1]
+result = ''
+for line in tqdm(ori_list):
+    r = ''
+    line = line.split(';')
+    for entity in line:
+        p = pred(entity)[0]
+        r = '{};{}'.format(r, p) if r != '' else p
+    result += '{}\n'.format(r)
+
+with open('./datasets/FN_Sichuan/top100_std.csv', encoding='utf-8', mode='w+') as f:
+    f.write(result)
 
 # %%

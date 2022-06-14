@@ -134,7 +134,20 @@ class Trainer(ITrainer):
             os.makedirs(_dir)
         torch.save(self.model, '{}/epoch_{}.pth'.format(_dir, epoch + 1 + save_offset))
 
-    def eval(self, epoch, num_epochs):
+    def eval(self, epoch, num_epochs, resume_path=False, eval_mode='dev', gpu=[0, 1, 2, 3]):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
+        if torch.cuda.is_available() and self.model_cuda == False:
+            self.model = torch.nn.DataParallel(self.model, device_ids=gpu).cuda()
+            self.model_cuda = True
+            self.model.to(device)
+
+        if not resume_path == False:
+            print('Accessing Resume PATH: {} ...\n'.format(resume_path))
+            model_dict = torch.load(resume_path).module.state_dict()
+            self.model.module.load_state_dict(model_dict)
+            self.model.to(device)
+        
         with torch.no_grad():
             eval_count = 0
             eval_result = []
